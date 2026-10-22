@@ -1006,7 +1006,23 @@ const Actions = {
 };
 
 /* ============================== EVENTOS ================================= */
+// Ajusta as janelas à área visível acima do teclado, para os campos não ficarem escondidos
+function bindKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const fit = () => {
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    document.documentElement.style.setProperty('--kb', kb + 'px');
+    document.body.classList.toggle('kb', kb > 120);
+    const f = document.activeElement;
+    if (kb > 120 && f && f.closest && f.closest('.sheet-b')) setTimeout(() => f.scrollIntoView({ block: 'center', behavior: 'smooth' }), 50);
+  };
+  vv.addEventListener('resize', fit);
+  vv.addEventListener('scroll', fit);
+}
+
 function bindEvents() {
+  bindKeyboard();
   // Linha divisória no cabeçalho só depois de rolar
   window.addEventListener('scroll', () => {
     document.querySelector('.top')?.classList.toggle('scrolled', window.scrollY > 4);

@@ -305,4 +305,9 @@ input[type=color] { padding: 4px !important; }
 #view.anim > *:nth-child(3) { animation-delay: .06s; }
 ::selection { background: color-mix(in srgb, var(--primary) 25%, transparent); }
 html, body { overflow-x: clip; }
+/* Teclado aberto: a janela sobe junto, ocupa o espaço visível e rola por dentro */
+#sheet, #dialog { bottom: var(--kb, 0px); }
+body.kb .sheet { max-height: 100%; border-radius: 20px 20px 0 0; }
+body.kb .sheet-b { padding-bottom: 24px; scroll-padding: 80px 0; }
+body.kb .tabbar { display: none; }
 .field input[list]::-webkit-calendar-picker-indicator, input[list]::-webkit-list-button { display: none !important; }
