@@ -1007,6 +1007,10 @@ const Actions = {
 
 /* ============================== EVENTOS ================================= */
 function bindEvents() {
+  // Linha divisória no cabeçalho só depois de rolar
+  window.addEventListener('scroll', () => {
+    document.querySelector('.top')?.classList.toggle('scrolled', window.scrollY > 4);
+  }, { passive: true });
   // Cliques por delegação (data-act)
   document.addEventListener('click', (e) => {
     const choice = e.target.closest('[data-choice]');
