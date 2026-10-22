@@ -1,6 +1,6 @@
 /* Service worker: cache-first, 100% offline.
    Para publicar uma nova versão, altere CACHE_VERSION. */
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v6';
 const CACHE = 'financeiro-' + CACHE_VERSION;
 const FILES = [
   './', './index.html', './style.css', './app.js', './manifest.json',

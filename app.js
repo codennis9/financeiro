@@ -80,7 +80,7 @@ const DEFAULT_CATS = [
 const EMOJIS = ['🏠', '🍽️', '🚗', '💊', '📚', '🎮', '📺', '💳', '🧾', '📦', '🐶', '👶', '✈️', '🛒', '💡', '📱', '🏋️', '🎁', '👕', '🔧', '☕', '🎓', '💼', '❤️'];
 const INCOME_TYPES = ['Salário', 'Extra', 'Freela', 'Rendimentos', 'Outros'];
 const ASSET_TYPES = ['Renda fixa', 'CDB', 'Tesouro', 'Ações', 'FIIs', 'Cripto', 'Poupança', 'Previdência', 'Outros'];
-const ASSET_COLORS = ['#7c3aed', '#0ea5e9', '#16a34a', '#f97316', '#ec4899', '#eab308', '#14b8a6', '#64748b', '#ef4444'];
+const ASSET_COLORS = ['#007aff', '#5e5ce6', '#64d2ff', '#40c8a0', '#ff9f0a', '#ff6482', '#bf5af2', '#ac8e68', '#8e8e93'];
 const METHODS = ['Pix', 'Dinheiro', 'Débito', 'Crédito', 'Boleto', 'Transferência', 'Outro'];
 
 const State = {
@@ -416,8 +416,9 @@ const UI = {
     el.className = 'toast';
     el.innerHTML = `<span>${Utils.esc(msg)}</span>${undo ? '<button type="button">Desfazer</button>' : ''}`;
     if (undo) el.querySelector('button').onclick = () => { State.restore(undo); el.remove(); UI.vibe(); UI.refresh(); };
-    box.appendChild(el);
-    setTimeout(() => el.remove(), undo ? 6000 : 3000);
+    box.replaceChildren(el); // um aviso por vez, sem empilhar
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => el.remove(), undo ? 5000 : 2200);
   },
 
   /* ---- Bottom sheets / diálogos ---- */
@@ -538,11 +539,12 @@ const Views = {
     if (UI.deferredPrompt && !S.settings.installDismissed) banners.push(`<div class="banner"><div class="grow">Instale o app para abrir direto da tela inicial.</div><button class="link" data-act="install">Instalar</button><button class="link" data-act="dismissInstall" aria-label="Dispensar">✕</button></div>`);
     else if (Views.isIOS() && !Views.standalone() && !S.settings.installDismissed) banners.push(`<div class="banner"><div class="grow">Para instalar: <b>Compartilhar</b> › <b>Adicionar à Tela de Início</b>.</div><button class="link" data-act="dismissInstall" aria-label="Dispensar">✕</button></div>`);
 
-    const hints = [];
-    if (s.overdueCount) hints.push(`<div class="hint">${s.overdueCount === 1 ? '1 conta atrasada' : s.overdueCount + ' contas atrasadas'} · ${UI.m(s.overdue)}</div>`);
+    const hints = [], f = UI.f;
+    if (f.status === 'atrasado') hints.push(`<div class="hint">Mostrando só as atrasadas · <button class="link inline" data-act="setFilter" data-k="status" data-v="todos">Ver todas</button></div>`);
+    else if (s.overdueCount) hints.push(`<button class="hint link-hint" data-act="setFilter" data-k="status" data-v="atrasado">${s.overdueCount === 1 ? '1 conta atrasada' : s.overdueCount + ' contas atrasadas'} · ${UI.m(s.overdue)} <span>Ver ›</span></button>`);
+    if (S.bills.length && !S.settings.swipeSeen) hints.push(`<div class="hint tip">Dica: deslize uma linha para a direita para pagar, ou para a esquerda para excluir. <button class="link inline" data-act="dismissTip">Ok</button></div>`);
     if (s.varPlanned && s.varPaid > s.varPlanned) hints.push(`<div class="hint">Variáveis passaram do previsto em ${UI.m(s.varPaid - s.varPlanned)}</div>`);
     const empty = !S.bills.length && !S.incomes.length && !S.series.length;
-    const f = UI.f;
     const status = (v, t) => `<button type="button" class="${f.status === v ? 'on' : ''}" data-act="setFilter" data-k="status" data-v="${v}" aria-pressed="${f.status === v}">${t}</button>`;
 
     return `<header class="top">${C.monthBar()}</header>
@@ -556,7 +558,7 @@ const Views = {
         <div class="foot"><small>Falta pagar</small><b>${UI.m(s.remaining)}</b></div>
       </section>
       ${hints.join('')}
-      ${empty ? `<div class="card empty"><div class="big">🗓️</div><p><b>Comece pela sua primeira conta</b><br>Toque no + para cadastrar contas fixas, variáveis e seu salário.</p><button class="btn primary" data-act="openAdd">Adicionar conta</button><button class="link" data-act="sample">Ver com dados de exemplo</button></div>` : `
+      ${empty ? `<div class="card empty"><div class="big"><svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="var(--primary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg></div><p><b>Comece pela sua primeira conta</b><br>Toque no + para cadastrar contas fixas, variáveis e seu salário.</p><button class="btn primary" data-act="openAdd">Adicionar conta</button><button class="link" data-act="sample">Ver com dados de exemplo</button></div>` : `
       <div class="ctl"><div class="seg">${status('todos', 'Todas')}${status('pendente', 'A pagar')}${status('pago', 'Pagas')}</div><button class="icon-btn" data-act="toggleSearch" aria-label="Buscar e filtrar" aria-pressed="${f.search}">${ICON.search}</button></div>
       ${f.search ? `<input class="search" type="search" data-q placeholder="Buscar por nome…" aria-label="Buscar" value="${Utils.esc(f.q)}">` : ''}
       <div id="bill-list" class="page" style="padding:0">${Views.listHtml()}</div>`}
@@ -568,10 +570,11 @@ const Views = {
   listHtml() {
     const f = UI.f, q = Utils.norm(f.q), m = UI.month, S = State.data;
     Services.ensureMonth(m);
-    const show = (done) => f.status === 'todos' || (f.status === 'pago') === done;
-    const bills = S.bills.filter((b) => b.month === m && Utils.norm(b.name).includes(q) && (f.cat === 'todas' || b.cat === f.cat) && show(b.status === 'pago'))
-      .sort((a, b) => (a.status === 'pago') - (b.status === 'pago') || a.day - b.day);
-    const incomes = f.cat !== 'todas' ? [] : S.incomes.filter((i) => i.month === m && Utils.norm(i.name).includes(q) && show(i.received)).sort((a, b) => a.received - b.received || a.date.localeCompare(b.date));
+    const late = f.status === 'atrasado';
+    const show = (done) => f.status === 'todos' || late || (f.status === 'pago') === done;
+    const bills = S.bills.filter((b) => b.month === m && Utils.norm(b.name).includes(q) && show(b.status === 'pago') && (!late || Services.status(b) === 'atrasado'))
+      .sort((a, b) => (a.status === 'pago') - (b.status === 'pago') || Utils.norm(a.name).localeCompare(Utils.norm(b.name)));
+    const incomes = late ? [] : S.incomes.filter((i) => i.month === m && Utils.norm(i.name).includes(q) && show(i.received)).sort((a, b) => a.received - b.received || a.name.localeCompare(b.name));
     const sec = (title, total, done, items, render) => (items.length
       ? `<div class="sec"><h2>${title}</h2><span>${UI.m(total)}</span></div><div class="list">${items.map(render).join('')}</div>` : '');
     const fixed = bills.filter((b) => b.nature === 'fixa'), vari = bills.filter((b) => b.nature !== 'fixa');
@@ -609,22 +612,22 @@ const Views = {
     const pct = inv > 0 ? (ret / inv) * 100 : 0;
     const assets = S.assets.map((a) => {
       const i = Services.invested(a), r = a.current - i;
-      return `<a class="card item" href="#/ativo/${a.id}" style="padding:12px 14px"><span class="ico" style="background:var(--soft)">📈</span><div class="grow"><strong>${Utils.esc(a.name)}</strong><small>${Utils.esc(a.type)} · ${Utils.esc(a.inst || '—')}</small></div><div class="right"><b>${UI.m(a.current)}</b><small style="color:var(${r >= 0 ? '--ok' : '--bad'})">${r >= 0 ? '+' : ''}${UI.m(r)} (${i > 0 ? ((r / i) * 100).toFixed(1) : '0.0'}%)</small></div></a>`;
+      return `<a class="card item" href="#/ativo/${a.id}"><div class="grow"><strong>${Utils.esc(a.name)}</strong><small>${Utils.esc(a.type)}${a.inst ? ' · ' + Utils.esc(a.inst) : ''}</small></div><div class="right"><b>${UI.m(a.current)}</b><small>${r >= 0 ? '+' : ''}${UI.m(r)} (${i > 0 ? ((r / i) * 100).toFixed(1) : '0.0'}%)</small></div></a>`;
     }).join('');
     const goals = S.goals.map((g) => {
       const p = Math.min(100, Math.round((g.saved / g.target) * 100)), { months, need } = Services.goalMonthly(g);
       return `<div class="card" data-act="editGoal" data-id="${g.id}" role="button" tabindex="0"><div class="top-row"><strong class="grow">${Utils.esc(g.name)}</strong><b>${p}%</b></div>
         <div class="progress" style="margin:8px 0" role="progressbar" aria-valuenow="${p}" aria-valuemin="0" aria-valuemax="100"><i style="width:${p}%;background:var(--primary)"></i></div>
         <small>${UI.m(g.saved)} de ${UI.m(g.target)} · prazo ${Utils.fmtDate(g.deadline)}</small><br>
-        <small>${g.saved >= g.target ? '🎉 Meta atingida!' : `Aportar <b>${UI.m(need)}</b>/mês por ${months} mês(es)`}</small>
-        <div class="btn-row" style="margin-top:8px"><button class="btn" data-act="goalAdd" data-id="${g.id}">+ Guardar valor</button></div></div>`;
+        <small>${g.saved >= g.target ? 'Meta atingida' : `Aportar <b>${UI.m(need)}</b>/mês por ${months} mês(es)`}</small>
+        <div class="btn-row" style="margin-top:12px"><button class="btn" data-act="goalAdd" data-id="${g.id}">Guardar valor</button></div></div>`;
     }).join('');
     return `${C.header('Investimentos', { right: '<button class="icon-btn" data-act="newAsset" aria-label="Novo ativo" style="font-size:26px">+</button>' })}
     <div class="page">
       <section class="hero"><small>Patrimônio total</small><div class="big">${UI.m(pat)}</div>
         <div class="hero-sub"><span>Investido ${UI.m(inv)}</span><span>${ret >= 0 ? '▲' : '▼'} ${UI.m(ret)} (${pct.toFixed(1)}%)</span></div></section>
       <div class="card"><h3>Distribuição por tipo</h3><br>${Charts.donut(Services.distribution())}</div>
-      <div class="card"><h3>Evolução mensal (aportado acumulado)</h3>${Charts.bars(Services.investEvolution(Utils.monthOf(Utils.today())), { aColor: '#007aff', two: false })}</div>
+      <div class="card"><h3>Evolução</h3>${Charts.bars(Services.investEvolution(Utils.monthOf(Utils.today())), { aColor: '#007aff', two: false })}</div>
       <div class="section-h"><h2>Meus ativos</h2></div>
       <div class="list">${assets || C.empty('📈', 'Nenhum ativo ainda.')}</div>
       <div class="section-h"><h2>Metas</h2><button class="link" data-act="newGoal">+ Nova meta</button></div>
@@ -636,7 +639,7 @@ const Views = {
     if (!a) return C.header('Ativo', { back: true }) + C.empty('🤷', 'Ativo não encontrado.');
     const i = Services.invested(a), r = a.current - i, p = i > 0 ? (r / i) * 100 : 0;
     const moves = [...a.moves].sort((x, y) => y.date.localeCompare(x.date)).map((mv) => C.swipe('move', mv.id + '|' + a.id,
-      `<div class="sw-front item"><span class="ico" style="background:${mv.kind === 'aporte' ? 'var(--ok-bg)' : 'var(--warn-bg)'}">${mv.kind === 'aporte' ? '⬆️' : '⬇️'}</span><div class="grow"><strong>${mv.kind === 'aporte' ? 'Aporte' : 'Resgate'}</strong><small>${Utils.fmtDate(mv.date)}</small></div><b>${UI.m(mv.amount)}</b></div>`)).join('');
+      `<div class="sw-front item"><div class="grow"><strong>${mv.kind === 'aporte' ? 'Aporte' : 'Resgate'}</strong><small>${Utils.fmtDate(mv.date)}</small></div><div class="right"><b>${mv.kind === 'aporte' ? '+' : '−'} ${UI.m(mv.amount)}</b></div></div>`)).join('');
     return `${C.header(Utils.esc(a.name), { back: true, right: `<button class="icon-btn" data-act="editAsset" data-id="${a.id}" aria-label="Editar">✎</button>` })}
     <div class="page">
       <section class="hero"><small>${Utils.esc(a.type)} · ${Utils.esc(a.inst || '—')}</small><div class="big">${UI.m(a.current)}</div>
@@ -691,11 +694,13 @@ const Views = {
       const bs = bills.filter((b) => b.month === m);
       months.push({ m, exp: Utils.sum(bs, (b) => Services.cost(b)), inc: Utils.sum(incomes.filter((i) => i.month === m), (i) => i.amount) });
     }
+    // Seletor de meses em português (últimos 24 e próximos 12)
+    const monthOpts = (sel) => Array.from({ length: 37 }, (_, k) => Utils.addMonths(cur, k - 24)).map((m) => `<option value="${m}" ${m === sel ? 'selected' : ''}>${Utils.monthShort(m)}/${m.slice(2, 4)}</option>`).join('');
     return `${C.header('Relatórios', { back: true })}
     <div class="page">
       <div class="card" style="display:grid;gap:12px"><div class="row2">
-        <div class="field"><label for="r-from">De</label><input id="r-from" type="month" data-rep="from" value="${r.from}"></div>
-        <div class="field"><label for="r-to">Até</label><input id="r-to" type="month" data-rep="to" value="${r.to}"></div></div></div>
+        <div class="field"><label for="r-from">De</label><select id="r-from" data-rep="from">${monthOpts(r.from)}</select></div>
+        <div class="field"><label for="r-to">Até</label><select id="r-to" data-rep="to">${monthOpts(r.to)}</select></div></div></div>
       <div class="card kv"><div><small>Receitas</small><b>${UI.m(inc)}</b></div><div><small>Despesas</small><b>${UI.m(spent)}</b></div><div><small>Saldo</small><b style="color:var(${inc - spent >= 0 ? '--ok' : '--bad'})">${UI.m(inc - spent)}</b></div><div><small>Média mensal</small><b>${UI.m(months.length ? Math.round(spent / months.length) : 0)}</b></div></div>
       <div class="card"><h3>Por mês</h3><table class="table"><tr><th>Mês</th><th>Receitas</th><th>Despesas</th></tr>${months.map((x) => `<tr><td>${Utils.monthShort(x.m)}/${x.m.slice(2, 4)}</td><td>${UI.m(x.inc)}</td><td>${UI.m(x.exp)}</td></tr>`).join('')}</table></div>
       <button class="btn primary block" data-act="exportPeriod">Exportar este período (CSV)</button>
@@ -732,8 +737,7 @@ const Forms = {
       ${UI.money('planned', 'Valor (R$)', v.planned)}
       ${UI.seg('nature', [{ v: 'fixa', t: 'Fixa' }, { v: 'variavel', t: 'Variável' }], v.nature, 'Tipo')}
       <p class="muted" data-hint></p>
-      ${edit ? `<div class="row2">${UI.select('status', 'Situação', [{ v: 'pendente', t: 'A pagar' }, { v: 'parcial', t: 'Parcial' }, { v: 'pago', t: 'Paga' }], v.status)}${UI.money('paid', 'Valor pago (R$)', v.paid)}</div>
-      <div class="btn-row"><button type="button" class="btn danger" data-act="delBill" data-id="${b.id}">Excluir</button></div>` : ''}`;
+      ${edit ? `<div class="btn-row"><button type="button" class="btn danger" data-act="delBill" data-id="${b.id}">Excluir</button></div>` : ''}`;
     UI.sheet({
       title: edit ? 'Editar conta' : 'Nova conta', body, submit: 'Salvar', focus: !edit,
       onMount(form) {
@@ -759,14 +763,10 @@ const Forms = {
           Services.addBill({ ...f, cat: 'outros', day: 0, method: '', note: '', month: UI.month, rec: f.nature === 'fixa' ? 'mensal' : 'unica' });
           UI.commit('Conta adicionada ✓'); return true;
         }
-        let paid = Utils.cents(g('paid')), status = g('status');
-        if (status === 'pendente') paid = 0;
-        if (status === 'pago' && paid <= 0) paid = f.planned;
-        if (status === 'parcial' && (paid <= 0 || paid >= f.planned)) return 'Para "Parcial", informe um valor pago menor que o valor da conta.';
         const scope = await UI.scope(b, 'Editar');
         if (!scope) return false;
         const snap = State.snapshot();
-        Services.updateItem('bill', b.id, { name: f.name, nature: f.nature, planned: f.planned, paid, status, paidAt: status === 'pendente' ? null : (b.paidAt || Utils.today()) }, scope);
+        Services.updateItem('bill', b.id, { name: f.name, nature: f.nature, planned: f.planned }, scope);
         UI.commit('Conta atualizada ✓', snap); return true;
       }
     });
@@ -995,8 +995,10 @@ const Actions = {
     else UI.choose('Instalar no iPhone', 'Toque no botão Compartilhar do Safari e escolha "Adicionar à Tela de Início".', []);
   },
   dismissInstall() { State.data.settings.installDismissed = true; State.save(); UI.refresh(); },
+  dismissTip() { State.data.settings.swipeSeen = true; State.save(); UI.refresh(); },
   // Gesto de deslizar: 'r' = para a direita (pagar/receber), 'l' = para a esquerda (excluir)
   swipe(kind, id, dir) {
+    if (!State.data.settings.swipeSeen) { State.data.settings.swipeSeen = true; State.save(); }
     if (dir === 'l') return remove(kind, id);
     if (kind === 'bill') Actions.quickPay({ id });
     else if (kind === 'income') Actions.quickReceive({ id });
