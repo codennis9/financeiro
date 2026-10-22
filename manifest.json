@@ -1,0 +1,19 @@
+{
+  "name": "Meu Financeiro",
+  "short_name": "Financeiro",
+  "description": "Controle financeiro pessoal: contas, receitas e investimentos.",
+  "id": "./",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "lang": "pt-BR",
+  "theme_color": "#f2f2f7",
+  "background_color": "#f2f2f7",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon.svg", "sizes": "192x192 512x512", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-maskable.svg", "sizes": "192x192 512x512", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

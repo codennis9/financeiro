@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Meu Financeiro</title>
+  <meta name="description" content="Controle financeiro pessoal: contas fixas e variáveis, receitas e investimentos.">
+  <meta name="theme-color" content="#f2f2f7">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <!-- iOS -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Financeiro">
+  <link rel="apple-touch-icon" id="apple-icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="view" aria-live="polite"></main>
+
+  <nav class="tabbar" aria-label="Navegação principal">
+    <a href="#/inicio" data-tab="inicio"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg><span>Mês</span></a>
+    <a href="#/analise" data-tab="analise"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V4M19 20v-6"/></svg><span>Análise</span></a>
+    <button type="button" class="fab" data-act="openAdd" aria-label="Adicionar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+    <a href="#/invest" data-tab="invest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg><span>Investir</span></a>
+    <a href="#/mais" data-tab="mais"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="3.2"/></svg><span>Ajustes</span></a>
+  </nav>
+
+  <div id="sheet"></div>
+  <div id="dialog"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <input type="file" id="file" accept="application/json,.json" hidden>
+
+  <noscript><p style="padding:24px">Este app precisa de JavaScript.</p></noscript>
+  <script src="app.js"></script>
+</body>
+</html>

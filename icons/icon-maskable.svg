@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Fundo sangrado (sem cantos) e conteúdo dentro da zona segura de 80% -->
+  <rect width="512" height="512" fill="#6d28d9"/>
+  <rect x="136" y="170" width="240" height="172" rx="30" fill="#fff"/>
+  <rect x="136" y="208" width="240" height="30" fill="#ddd6fe"/>
+  <circle cx="314" cy="290" r="25" fill="#7c3aed"/>
+  <rect x="164" y="278" width="76" height="14" rx="7" fill="#c4b5fd"/>
+</svg>
