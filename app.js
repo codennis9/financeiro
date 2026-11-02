@@ -80,7 +80,7 @@ const DEFAULT_CATS = [
 const EMOJIS = ['🏠', '🍽️', '🚗', '💊', '📚', '🎮', '📺', '💳', '🧾', '📦', '🐶', '👶', '✈️', '🛒', '💡', '📱', '🏋️', '🎁', '👕', '🔧', '☕', '🎓', '💼', '❤️'];
 const INCOME_TYPES = ['Salário', 'Extra', 'Freela', 'Rendimentos', 'Outros'];
 const ASSET_TYPES = ['Renda fixa', 'CDB', 'Tesouro', 'Ações', 'FIIs', 'Cripto', 'Poupança', 'Previdência', 'Outros'];
-const ASSET_COLORS = ['#007aff', '#5e5ce6', '#64d2ff', '#40c8a0', '#ff9f0a', '#ff6482', '#bf5af2', '#ac8e68', '#8e8e93'];
+const ASSET_COLORS = ['var(--primary)', '#718ab5', '#789785', '#a48c6a', '#8997aa', '#6f8797', '#9386a8', '#9b8b79', '#a0a0a0'];
 const METHODS = ['Pix', 'Dinheiro', 'Débito', 'Crédito', 'Boleto', 'Transferência', 'Outro'];
 
 const State = {
@@ -178,6 +178,108 @@ const Services = {
     const top = [...months].sort((a, b) => b.st.projected - a.st.projected)[0];
     const cats = this.byCategory(months.flatMap((x) => x.st.bills));
     return { total, avg: active.length ? Math.round(total / active.length) : 0, topMonth: top && top.st.projected ? top : null, topCat: cats[0] || null };
+  },
+  analysisRange(filter = UI.analysis.filter) {
+    const today = Utils.today(), selectedMonth = UI.month;
+    const endOfMonth = (m) => `${m}-${Utils.pad(Utils.daysIn(m))}`;
+    const shiftDay = (date, amount) => {
+      const d = new Date(`${date}T12:00:00`);
+      d.setDate(d.getDate() + amount);
+      return `${d.getFullYear()}-${Utils.pad(d.getMonth() + 1)}-${Utils.pad(d.getDate())}`;
+    };
+    if (filter === 'today') return { from: today, to: today };
+    if (filter === 'week') {
+      const weekday = (new Date(`${today}T12:00:00`).getDay() + 6) % 7;
+      return { from: shiftDay(today, -weekday), to: today };
+    }
+    if (filter === '3m' || filter === '6m') {
+      const count = filter === '3m' ? 3 : 6, start = Utils.addMonths(selectedMonth, 1 - count);
+      return { from: `${start}-01`, to: endOfMonth(selectedMonth) };
+    }
+    if (filter === 'year') {
+      const year = selectedMonth.slice(0, 4);
+      const to = year === today.slice(0, 4) ? today : endOfMonth(selectedMonth);
+      return { from: `${year}-01-01`, to };
+    }
+    if (filter === 'custom') return { from: UI.analysis.from || `${selectedMonth}-01`, to: UI.analysis.to || endOfMonth(selectedMonth) };
+    return { from: `${selectedMonth}-01`, to: endOfMonth(selectedMonth) };
+  },
+  analysisData(from, to) {
+    const firstMonth = Utils.monthOf(from), lastMonth = Utils.monthOf(to);
+    this.ensureRange(firstMonth, lastMonth);
+    const inRange = (date) => date >= from && date <= to;
+    const bills = State.data.bills.filter((b) => inRange(Utils.dueDate(b.month, b.day)));
+    const incomes = State.data.incomes.filter((i) => inRange(i.date));
+    const actualBills = State.data.bills.filter((b) => b.status === 'pago' && inRange(b.paidAt || Utils.dueDate(b.month, b.day)));
+    const income = Utils.sum(incomes, (i) => i.amount);
+    const expense = Utils.sum(bills, (b) => this.cost(b));
+    const received = Utils.sum(incomes.filter((i) => i.received), (i) => i.amount);
+    const paid = Utils.sum(bills, (b) => b.paid);
+    const byName = (items, nameOf, valueOf) => {
+      const map = new Map();
+      for (const item of items) {
+        const name = nameOf(item);
+        map.set(name, (map.get(name) || 0) + valueOf(item));
+      }
+      return [...map].map(([label, value]) => ({ label, value })).filter((x) => x.value > 0).sort((a, b) => b.value - a.value);
+    };
+    const expenseGroups = byName(bills, (b) => b.nature === 'fixa' ? `${b.name} · Fixa` : `${b.name} · Variável`, (b) => this.cost(b));
+    const incomeGroups = byName(incomes, (i) => i.name || i.type, (i) => i.amount);
+    const days = Utils.daysBetween(from, to) + 1, buckets = [];
+    const step = days > 1095 ? 'year' : days > 45 ? 'month' : days > 7 ? 'week' : 'day';
+    for (let cursor = from; cursor <= to;) {
+      let end;
+      if (step === 'year') end = cursor.slice(0, 4) === to.slice(0, 4) ? to : `${cursor.slice(0, 4)}-12-31`;
+      else if (step === 'month') end = cursor.slice(0, 7) === to.slice(0, 7) ? to : `${cursor.slice(0, 7)}-${Utils.pad(Utils.daysIn(cursor.slice(0, 7)))}`;
+      else end = step === 'week' ? (Utils.daysBetween(cursor, to) < 6 ? to : this.shiftDate(cursor, 6)) : cursor;
+      if (end > to) end = to;
+      buckets.push({
+        from: cursor, to: end,
+        label: step === 'year' ? cursor.slice(0, 4) : step === 'month' ? Utils.monthShort(cursor.slice(0, 7)) : step === 'week' ? `${cursor.slice(8, 10)}–${end.slice(8, 10)}` : cursor.slice(8, 10),
+        income: 0, expense: 0, inflow: 0, outflow: 0
+      });
+      cursor = this.shiftDate(end, 1);
+    }
+    const bucketIndex = (date) => {
+      if (date < from || date > to) return -1;
+      if (step === 'year') return Number(date.slice(0, 4)) - Number(from.slice(0, 4));
+      if (step === 'month') return Utils.monthsBetween(from.slice(0, 7), date.slice(0, 7));
+      const offset = Utils.daysBetween(from, date);
+      return step === 'week' ? Math.floor(offset / 7) : offset;
+    };
+    for (const b of bills) {
+      const index = bucketIndex(Utils.dueDate(b.month, b.day));
+      if (index >= 0 && buckets[index]) buckets[index].expense += this.cost(b);
+    }
+    for (const i of incomes) {
+      const index = bucketIndex(i.date);
+      if (index >= 0 && buckets[index]) {
+        buckets[index].income += i.amount;
+        if (i.received) buckets[index].inflow += i.amount;
+      }
+    }
+    for (const b of actualBills) {
+      const index = bucketIndex(b.paidAt || Utils.dueDate(b.month, b.day));
+      if (index >= 0 && buckets[index]) buckets[index].outflow += b.paid;
+    }
+    let running = 0;
+    buckets.forEach((b) => { running += b.income - b.expense; b.balance = running; });
+    const fixed = Utils.sum(bills.filter((b) => b.nature === 'fixa'), (b) => this.cost(b));
+    const variable = Utils.sum(bills.filter((b) => b.nature !== 'fixa'), (b) => this.cost(b));
+    return { bills, incomes, actualBills, income, expense, balance: income - expense, received, paid, savingsRate: income ? ((income - expense) / income) * 100 : null, fixed, variable, expenseGroups, incomeGroups, buckets, days };
+  },
+  shiftDate(date, amount) {
+    const d = new Date(`${date}T12:00:00`);
+    d.setDate(d.getDate() + amount);
+    return `${d.getFullYear()}-${Utils.pad(d.getMonth() + 1)}-${Utils.pad(d.getDate())}`;
+  },
+  analysisCompare(from, to) {
+    const days = Utils.daysBetween(from, to) + 1;
+    const prevTo = this.shiftDate(from, -1), prevFrom = this.shiftDate(prevTo, 1 - days);
+    return { from: prevFrom, to: prevTo, data: this.analysisData(prevFrom, prevTo) };
+  },
+  investmentAt(date) {
+    return Utils.sum(State.data.assets, (a) => Utils.sum(a.moves.filter((mv) => mv.date <= date), (mv) => mv.kind === 'aporte' ? mv.amount : -mv.amount));
   },
 
   // ---- CRUD de contas e receitas
@@ -374,12 +476,69 @@ const Charts = {
   // Barras agrupadas: a (verde) e opcionalmente b (vermelho)
   bars(data, { aColor = '#16a34a', bColor = '#ef4444', two = true } = {}) {
     const max = Math.max(1, ...data.map((d) => Math.max(d.a, two ? d.b : 0))), H = 120, W = 340, g = W / data.length, bw = two ? g * 0.34 : g * 0.56;
-    const bar = (v, x, color, label) => `<rect x="${x}" y="${H - (v / max) * H + 4}" width="${bw}" height="${Math.max(1, (v / max) * H)}" rx="3" fill="${color}"><title>${label}: ${Utils.money(v)}</title></rect>`;
+    const bar = (v, x, color, label) => `<rect x="${x}" y="${H - (v / max) * H + 4}" width="${bw}" height="${Math.max(1, (v / max) * H)}" rx="5"><title>${label}: ${Utils.money(v)}</title></rect>`;
     const cols = data.map((d, i) => {
       const x0 = i * g + (g - (two ? bw * 2 + 2 : bw)) / 2;
       return bar(d.a, x0, aColor, d.label) + (two ? bar(d.b, x0 + bw + 2, bColor, d.label) : '') + `<text x="${i * g + g / 2}" y="${H + 18}">${d.label}</text>`;
     }).join('');
     return `<svg class="bars" viewBox="0 0 ${W} ${H + 24}" role="img" aria-label="Gráfico de barras">${cols}</svg>`;
+  },
+  analysisDonut(items, kind, from, to) {
+    const palette = ['var(--primary)', '#789785', '#a48c6a', '#8997aa', '#6f7d8f', '#c4cbd7'];
+    const total = Utils.sum(items, (x) => x.value);
+    if (!total) return '<div class="chart-empty">Sem lançamentos neste período.</div>';
+    const visible = items.slice(0, 5);
+    if (items.length > 5) visible.push({ label: 'Outros', value: Utils.sum(items.slice(5), (x) => x.value), grouped: items.slice(5) });
+    const r = 43, circumference = 2 * Math.PI * r;
+    let offset = 0;
+    const arcs = visible.map((item, index) => {
+      const length = item.value / total * circumference;
+      const drillKind = item.grouped ? `${kind}Other` : kind;
+      const key = encodeURIComponent(item.grouped ? JSON.stringify(item.grouped.map((x) => x.label)) : item.label);
+      const arc = `<circle class="donut-slice" cx="60" cy="60" r="${r}" fill="none" stroke="${palette[index]}" stroke-width="16" stroke-dasharray="${length} ${circumference - length}" stroke-dashoffset="${-offset}" transform="rotate(-90 60 60)" tabindex="0" role="button" aria-label="${Utils.esc(item.label)}, ${UI.m(item.value)}, ${Math.round(item.value / total * 100)}%" data-act="analysisDrill" data-kind="${drillKind}" data-key="${key}" data-from="${from}" data-to="${to}"><title>${Utils.esc(item.label)} · ${UI.m(item.value)} (${Math.round(item.value / total * 100)}%)</title></circle>`;
+      offset += length;
+      return arc;
+    }).join('');
+    const legend = visible.map((item, index) => `<button type="button" class="legend-row" data-act="analysisDrill" data-kind="${item.grouped ? `${kind}Other` : kind}" data-key="${encodeURIComponent(item.grouped ? JSON.stringify(item.grouped.map((x) => x.label)) : item.label)}" data-from="${from}" data-to="${to}"><i style="--legend-color:${palette[index]}"></i><span>${Utils.esc(item.label)}</span><b>${Math.round(item.value / total * 100)}%</b><small>${UI.m(item.value)}</small></button>`).join('');
+    return `<div class="analysis-donut"><svg class="donut" viewBox="0 0 120 120" role="group" aria-label="Gráfico de rosca, total ${UI.m(total)}">${arcs}<text x="60" y="57" class="donut-total" aria-hidden="true">${Utils.esc(items.length + ' itens')}</text><text x="60" y="70" class="donut-caption" aria-hidden="true">no período</text></svg><div class="analysis-legend">${legend}</div></div>`;
+  },
+  analysisBars(data, first, second, firstLabel, secondLabel, format = 'money', drillKind = 'bucket') {
+    if (!data.length) return '<div class="chart-empty">Sem dados para comparar.</div>';
+    const width = Math.max(270, Math.min(1200, data.length * 46 + 40)), height = 220, left = 42, right = 12, top = 14, bottom = 38;
+    const plotW = width - left - right, plotH = height - top - bottom, group = plotW / data.length, barW = Math.min(20, group * .28);
+    const max = Math.max(1, ...data.flatMap((d) => [d[first], d[second]]));
+    const fmt = (v) => format === 'percent' ? `${v.toFixed(1)}%` : UI.m(v);
+    const grid = [0, 1, 2, 3].map((i) => {
+      const y = top + (plotH * i / 3), val = max * (1 - i / 3);
+      return `<line x1="${left}" y1="${y}" x2="${width - right}" y2="${y}" class="chart-grid"/><text x="${left - 6}" y="${y + 4}" class="chart-axis" text-anchor="end">${format === 'percent' ? `${Math.round(val)}%` : State.data.settings.hide ? '••' : Utils.money(val).replace('R$', '').trim()}</text>`;
+    }).join('');
+    const bars = data.map((d, index) => {
+      const x = left + index * group + group / 2, v1 = Math.max(0, d[first]), v2 = Math.max(0, d[second]);
+      const h1 = v1 / max * plotH, h2 = v2 / max * plotH;
+      const action = (field, value) => `<rect class="chart-bar ${field}" x="${x - barW - 1}" y="${top + plotH - h1}" width="${barW}" height="${Math.max(1, h1)}" rx="7" tabindex="0" role="button" aria-label="${Utils.esc(d.label)} · ${Utils.esc(firstLabel)} ${fmt(v1)}" data-act="analysisDrill" data-kind="${drillKind}" data-from="${d.from}" data-to="${d.to}"><title>${Utils.esc(d.label)} · ${Utils.esc(firstLabel)}: ${fmt(value)}</title></rect>`
+        + `<rect class="chart-bar bar-second" x="${x + 1}" y="${top + plotH - h2}" width="${barW}" height="${Math.max(1, h2)}" rx="7" tabindex="0" role="button" aria-label="${Utils.esc(d.label)} · ${Utils.esc(secondLabel)} ${fmt(v2)}" data-act="analysisDrill" data-kind="${drillKind}" data-from="${d.from}" data-to="${d.to}"><title>${Utils.esc(d.label)} · ${Utils.esc(secondLabel)}: ${fmt(value === v1 ? v2 : value)}</title></rect>`;
+      return action(first, v1) + `<text x="${x}" y="${height - 12}" class="chart-label" text-anchor="middle">${Utils.esc(d.label)}</text>`;
+    }).join('');
+    return `<div class="chart-scroll"><svg class="analysis-bars" style="min-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="${Utils.esc(firstLabel)} comparado com ${Utils.esc(secondLabel)}">${grid}${bars}</svg></div><div class="chart-legend"><span><i class="legend-income"></i>${Utils.esc(firstLabel)}</span><span><i class="legend-expense"></i>${Utils.esc(secondLabel)}</span></div>`;
+  },
+  analysisLine(data, valueKey, title, color = 'var(--primary)', drillKind = 'bucket') {
+    if (!data.length || !data.some((d) => d[valueKey] !== 0)) return '<div class="chart-empty">Ainda não há dados para mostrar a evolução.</div>';
+    const width = Math.max(270, Math.min(1200, data.length * 46 + 40)), height = 220, left = 42, right = 14, top = 20, bottom = 38;
+    const plotW = width - left - right, plotH = height - top - bottom;
+    const values = data.map((d) => d[valueKey]), min = Math.min(0, ...values), max = Math.max(1, ...values);
+    const y = (v) => top + (max === min ? plotH / 2 : (max - v) / (max - min) * plotH);
+    const points = data.map((d, i) => ({ ...d, x: left + (data.length === 1 ? plotW / 2 : i * plotW / (data.length - 1)), y: y(d[valueKey]) }));
+    const path = points.length < 3
+      ? points.map((p, i) => `${i ? 'L' : 'M'}${p.x},${p.y}`).join(' ')
+      : points.slice(1).reduce((d, p, i) => {
+        const previous = points[i], next = points[i + 2];
+        if (!next) return `${d} L${p.x},${p.y}`;
+        const midX = (p.x + next.x) / 2, midY = (p.y + next.y) / 2;
+        return `${d} Q${p.x},${p.y} ${midX},${midY}`;
+      }, `M${points[0].x},${points[0].y}`);
+    const zero = min < 0 && max > 0 ? `<line x1="${left}" y1="${y(0)}" x2="${width - right}" y2="${y(0)}" class="chart-zero"/>` : '';
+    const circles = points.map((p) => `<circle class="chart-point" cx="${p.x}" cy="${p.y}" r="5" tabindex="0" role="button" aria-label="${Utils.esc(p.label)} · ${UI.m(p[valueKey])}" data-act="analysisDrill" data-kind="${drillKind}" data-from="${p.from}" data-to="${p.to}"><title>${Utils.esc(p.label)} · ${UI.m(p[valueKey])}</title></circle><text x="${p.x}" y="${height - 12}" class="chart-label" text-anchor="middle">${Utils.esc(p.label)}</text>`).join('');
+    return `<div class="chart-scroll"><svg class="analysis-line" style="min-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="${Utils.esc(title)}"><line x1="${left}" y1="${top + plotH}" x2="${width - right}" y2="${top + plotH}" class="chart-grid" aria-hidden="true"/>${zero}<path d="${path}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"/>${circles}</svg></div>`;
   }
 };
 
@@ -395,6 +554,7 @@ const ICON = {
 const UI = {
   month: Utils.monthOf(Utils.today()),
   f: { status: 'todos', cat: 'todas', q: '', search: false },
+  analysis: { filter: 'month', from: '', to: '', detail: null },
   rep: null,
   noClick: 0,
   deferredPrompt: null,
@@ -408,7 +568,7 @@ const UI = {
     const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = dark ? '#000000' : '#f2f2f7';
+    if (meta) meta.content = dark ? '#101114' : '#f5f5f7';
   },
 
   toast(msg, { undo } = {}) {
@@ -481,9 +641,15 @@ const UI = {
   },
   render(anim) {
     const { name, arg } = this.route(), view = $v();
+    view.dataset.route = name;
     view.innerHTML = Views[name](arg);
     if (anim) { view.classList.remove('anim'); void view.offsetWidth; view.classList.add('anim'); window.scrollTo(0, 0); }
-    document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('on', a.dataset.tab === name || (name === 'ativo' && a.dataset.tab === 'invest') || ((name === 'relatorios' || name === 'categorias') && a.dataset.tab === 'mais')));
+    document.querySelectorAll('.tabbar a').forEach((a) => {
+      const active = a.dataset.tab === name || (name === 'ativo' && a.dataset.tab === 'invest') || ((name === 'relatorios' || name === 'categorias') && a.dataset.tab === 'mais');
+      a.classList.toggle('on', active);
+      if (active) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    });
   },
   refresh() { const y = window.scrollY; this.render(false); window.scrollTo(0, y); },
   shift(n) { this.month = Utils.addMonths(this.month, n); this.vibe(8); this.refresh(); },
@@ -506,19 +672,22 @@ const C = {
   bill(b) {
     const st = Services.status(b), done = b.status === 'pago';
     const sub = done ? 'Paga' : b.instTotal ? `Parcela ${b.inst}/${b.instTotal}` : b.nature === 'fixa' ? 'Fixa' : 'Variável';
-    const label = { atrasado: 'Atrasada', parcial: `Pago ${UI.m(b.paid)}` }[st] || '';
-    const front = `<div class="sw-front item ${done ? 'done' : ''}" data-act="editBill" data-id="${b.id}" role="button" tabindex="0" aria-label="${Utils.esc(b.name)}">
+    const label = { atrasado: 'Atrasada', parcial: `Parcial · pago ${UI.m(b.paid)}`, pendente: 'A pagar' }[st] || '';
+    const front = `<div class="sw-front item ${done ? 'done' : ''}">
       <button type="button" class="chk ${done ? 'on' : ''} ${st === 'atrasado' ? 'late' : ''}" data-act="quickPay" data-id="${b.id}" aria-label="${done ? 'Desmarcar pagamento' : 'Marcar como pago'}: ${Utils.esc(b.name)}"><i></i></button>
-      <div class="grow"><strong>${Utils.esc(b.name)}</strong><small>${Utils.esc(sub)}</small></div>
-      <div class="right"><b>${UI.m(done ? b.paid : b.planned)}</b>${label ? `<span class="badge st-${st}">${label}</span>` : ''}</div></div>`;
+      <button type="button" class="row-edit grow" data-act="editBill" data-id="${b.id}" aria-label="Editar conta ${Utils.esc(b.name)}">
+        <span class="grow"><strong>${Utils.esc(b.name)}</strong><small>${Utils.esc(sub)}</small></span>
+        <span class="right"><b>${UI.m(done ? b.paid : b.planned)}</b>${label ? `<span class="badge st-${st}">${label}</span>` : ''}</span>
+      </button></div>`;
     return this.swipe('bill', b.id, front, { pay: done ? 'Desfazer' : 'Pagar' });
   },
   income(i) {
-    const st = i.received ? 'recebido' : 'areceber';
-    const front = `<div class="sw-front item ${i.received ? 'done' : ''}" data-act="editIncome" data-id="${i.id}" role="button" tabindex="0" aria-label="${Utils.esc(i.name)}">
+    const front = `<div class="sw-front item ${i.received ? 'done' : ''}">
       <button type="button" class="chk ${i.received ? 'on' : ''}" data-act="quickReceive" data-id="${i.id}" aria-label="${i.received ? 'Desmarcar recebimento' : 'Marcar como recebido'}: ${Utils.esc(i.name)}"><i></i></button>
-      <div class="grow"><strong>${Utils.esc(i.name)}</strong>      <small>${i.received ? 'Recebido' : 'A receber'}</small></div>
-            <div class="right"><b>${UI.m(i.amount)}</b></div></div>`;
+      <button type="button" class="row-edit grow" data-act="editIncome" data-id="${i.id}" aria-label="Editar receita ${Utils.esc(i.name)}">
+        <span class="grow"><strong>${Utils.esc(i.name)}</strong><small>${i.received ? 'Recebido' : 'A receber'}</small></span>
+        <span class="right"><b>${UI.m(i.amount)}</b></span>
+      </button></div>`;
     return this.swipe('income', i.id, front, { pay: i.received ? 'Desfazer' : 'Receber' });
   },
   chips(group, opts, cur) {
@@ -588,23 +757,128 @@ const Views = {
 
   /* ---------- Análise (gráficos) ---------- */
   analise() {
-    const m = UI.month, s = Services.monthStats(m), hide = State.data.settings.hide;
-    Services.ensureRange(Utils.addMonths(m, -11), m);
-    const split = s.fixedCost + s.varCost, fixedPct = split ? (s.fixedCost / split) * 100 : 0;
-    const ann = Services.annual(m.slice(0, 4));
-    const varNote = s.varPlanned && s.varPaid > s.varPlanned ? `<small style="color:var(--bad)">estourou ${UI.m(s.varPaid - s.varPlanned)}</small>` : `<small>previsto ${UI.m(s.varPlanned)}</small>`;
+    const filter = UI.analysis.filter, range = Services.analysisRange(filter);
+    const data = Services.analysisData(range.from, range.to);
+    const previous = Services.analysisCompare(range.from, range.to).data;
+    const previousRate = previous.income ? ((previous.income - previous.expense) / previous.income) * 100 : null;
+    const compare = (current, old, lowerIsBetter = false) => {
+      if (!old) return 'Sem base anterior para comparar';
+      const pct = Math.round(((current - old) / Math.abs(old)) * 100);
+      if (!pct) return 'Igual ao período anterior';
+      const positive = lowerIsBetter ? pct < 0 : pct > 0;
+      return `${pct > 0 ? '+' : ''}${pct}% ${positive ? 'favorável' : 'em relação'} ao anterior`;
+    };
+    const periodLabel = `${Utils.fmtDate(range.from)} – ${Utils.fmtDate(range.to)}`;
+    const options = [['today', 'Hoje'], ['week', 'Esta semana'], ['month', 'Este mês'], ['3m', '3 meses'], ['6m', '6 meses'], ['year', 'Este ano'], ['custom', 'Personalizado']];
+    const filters = options.map(([key, label]) => `<button type="button" class="chip ${filter === key ? 'on' : ''}" data-act="analysisPeriod" data-filter="${key}" aria-pressed="${filter === key}">${label}</button>`).join('');
+    const custom = filter === 'custom' ? `<div class="analysis-dates"><label>De <input type="date" aria-label="Data inicial da análise" data-analysis-date="from" value="${range.from}" max="${range.to}" required></label><label>Até <input type="date" aria-label="Data final da análise" data-analysis-date="to" value="${range.to}" min="${range.from}" required></label></div>` : '';
+    const kpi = (title, value, sub, cls = '') => `<article class="analysis-kpi ${cls}"><span>${title}</span><strong>${value}</strong><small>${sub}</small></article>`;
+    const insight = [];
+    if (data.expenseGroups.length) insight.push(`Maior gasto: <b>${Utils.esc(data.expenseGroups[0].label)}</b> · ${UI.m(data.expenseGroups[0].value)}.`);
+    if (previous.expense > 0 && data.expense > 0) {
+      const diff = data.expense - previous.expense, pct = Math.round(Math.abs(diff) / previous.expense * 100);
+      insight.push(`Despesas ${diff > 0 ? 'subiram' : 'caíram'} ${pct}% em comparação com o período anterior.`);
+    }
+    if (data.savingsRate !== null) insight.push(data.balance >= 0 ? `Sobrou ${UI.m(data.balance)} (${data.savingsRate.toFixed(1)}% das receitas previstas).` : `As despesas superaram as receitas em ${UI.m(Math.abs(data.balance))}.`);
+    const expenseDonut = Charts.analysisDonut(data.expenseGroups, 'billName', range.from, range.to);
+    const incomeDonut = Charts.analysisDonut(data.incomeGroups, 'incomeName', range.from, range.to);
+    const fixedPct = data.expense ? data.fixed / data.expense * 100 : 0;
+    const variablePct = data.expense ? data.variable / data.expense * 100 : 0;
+    const natureChart = data.expense ? `<div class="nature-chart" role="img" aria-label="Despesas: ${fixedPct.toFixed(0)}% fixas e ${variablePct.toFixed(0)}% variáveis"><i style="width:${fixedPct}%;background:var(--primary)"></i><i style="width:${variablePct}%;background:var(--chart-gray)"></i></div><div class="chart-legend"><span><i class="legend-income"></i>Fixas · ${UI.m(data.fixed)}</span><span><i class="legend-expense"></i>Variáveis · ${UI.m(data.variable)}</span></div>` : '<div class="chart-empty">Sem despesas neste período.</div>';
+    const investmentData = data.buckets.map((b) => ({ ...b, invested: Services.investmentAt(b.to) }));
+    const goals = State.data.goals.map((g) => {
+      const pct = g.target ? Math.min(100, Math.round(g.saved / g.target * 100)) : 0;
+      return `<div class="goal-line"><div class="goal-line-top"><b>${Utils.esc(g.name)}</b><span>${pct}%</span></div><div class="progress" role="progressbar" aria-label="Progresso da meta ${Utils.esc(g.name)}" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div><small>${UI.m(g.saved)} de ${UI.m(g.target)} · faltam ${UI.m(Math.max(0, g.target - g.saved))}</small></div>`;
+    }).join('');
+    const ranking = data.expenseGroups.slice(0, 5).map((x, i) => `<button type="button" class="ranking-row" data-act="analysisDrill" data-kind="billName" data-key="${encodeURIComponent(x.label)}" data-from="${range.from}" data-to="${range.to}"><span class="rank-index">${i + 1}</span><span class="grow"><b>${Utils.esc(x.label)}</b><small>${data.expense ? Math.round(x.value / data.expense * 100) : 0}% das despesas</small></span><strong>${UI.m(x.value)}</strong></button>`).join('') || '<div class="chart-empty">Sem despesas cadastradas neste período.</div>';
+    const detail = Views.analysisDetail(UI.analysis.detail);
+    const patrimony = Services.patrimony();
     return `<header class="top">${C.monthBar()}</header>
-    <div class="page">
-      <div class="card"><h3>Fixas × Variáveis</h3>
-        <div class="stack" aria-hidden="true"><i style="width:${fixedPct}%;        background:#007aff"></i><i style="width:${split ? 100 - fixedPct : 0}%;background:#c7c7cc"></i></div>
-                <div class="kv"><div><span class="dot" style="background:#007aff"></span>Fixas<b>${UI.m(s.fixedCost)}</b>${s.income ? `<small>${hide ? '••' : Math.round((s.fixedCost / s.income) * 100) + '%'} da renda</small>` : ''}</div><div><span class="dot" style="background:#c7c7cc"></span>Variáveis<b>${UI.m(s.varCost)}</b>${varNote}</div></div></div>
-      <div class="card"><h3>Últimos 12 meses</h3><small><span class="dot" style="background:#007aff"></span>Receitas <span class="dot" style="background:#c7c7cc"></span>Despesas</small>${Charts.bars(Services.last12(m), { aColor: '#007aff', bColor: '#c7c7cc' })}</div>
-      <div class="card"><h3>Resumo de ${m.slice(0, 4)}</h3><div class="kv">
-        <div><small>Total gasto</small><b>${UI.m(ann.total)}</b></div><div><small>Média mensal</small><b>${UI.m(ann.avg)}</b></div>
-        <div><small>Mês mais caro</small><b>${ann.topMonth ? Utils.monthLabel(ann.topMonth.m).split(' ')[0] : '—'}</b><small>${ann.topMonth ? UI.m(ann.topMonth.st.projected) : ''}</small></div>
-</div></div>
-      <div class="list"><a class="card item" href="#/relatorios"><div class="grow"><strong>Relatórios por período</strong></div><small>›</small></a></div>
+    <div class="page analysis-page">
+      <section class="analysis-heading"><div><p class="eyebrow">SEU DINHEIRO, EM PERSPECTIVA</p><h2>Análise</h2><p class="muted">${periodLabel}</p></div><button class="icon-btn" data-act="toggleHide" aria-label="Ocultar ou mostrar valores">${State.data.settings.hide ? ICON.eyeOff : ICON.eye}</button></section>
+      <div class="chips analysis-filters" role="group" aria-label="Período da análise">${filters}</div>
+      ${custom}
+      <p class="analysis-method">Valores previstos com base nas contas e receitas cadastradas.</p>
+      <section class="analysis-result ${data.balance < 0 ? 'negative' : ''}" aria-label="Resultado financeiro do período">
+        <div class="analysis-result-label"><span>Resultado do período</span><span class="analysis-result-mark" aria-hidden="true">${data.balance < 0 ? '−' : '+'}</span></div>
+        <strong>${UI.m(data.balance)}</strong>
+        <div class="analysis-result-foot"><span>Receitas menos despesas previstas</span><span>${compare(data.balance, previous.balance)}</span></div>
+      </section>
+      <section class="analysis-metrics" aria-label="Outros indicadores do período">
+        <article class="analysis-metric"><span>Receitas</span><strong>${UI.m(data.income)}</strong><small>${compare(data.income, previous.income)}</small></article>
+        <article class="analysis-metric"><span>Despesas</span><strong>${UI.m(data.expense)}</strong><small>${compare(data.expense, previous.expense, true)}</small></article>
+        <article class="analysis-metric"><span>Taxa de economia</span><strong>${data.savingsRate === null ? '—' : `${data.savingsRate.toFixed(1)}%`}</strong><small>${data.savingsRate === null ? 'Cadastre uma receita para calcular' : previousRate === null ? 'Resultado ÷ receitas' : `${data.savingsRate - previousRate > 0 ? '+' : ''}${(data.savingsRate - previousRate).toFixed(1)} p.p. vs. período anterior`}</small></article>
+        <article class="analysis-metric"><span>Patrimônio atual</span><strong>${UI.m(patrimony)}</strong><small>Valor informado nos investimentos</small></article>
+      </section>
+      <section class="analysis-section"><div class="analysis-section-heading"><h3>Panorama do período</h3><p>Compare entradas e despesas e acompanhe o saldo.</p></div>
+      <div class="analysis-grid analysis-primary">
+        <section class="card analysis-card wide"><div class="analysis-card-head"><div><h3>Receitas e despesas</h3><p>Valores previstos ao longo do período</p></div></div>${Charts.analysisBars(data.buckets, 'income', 'expense', 'Receitas', 'Despesas')}</section>
+        <section class="card analysis-card wide"><div class="analysis-card-head"><div><h3>Evolução do saldo</h3><p>Resultado acumulado dentro do período</p></div></div>${Charts.analysisLine(data.buckets, 'balance', 'Evolução do saldo')}</section>
+        <section class="card analysis-card"><div class="analysis-card-head"><div><h3>Despesas por conta</h3><p>O cadastro atual não pede categorias; detalhamento por nome</p></div></div>${expenseDonut}</section>
+        <section class="card analysis-card"><div class="analysis-card-head"><div><h3>De onde vêm as receitas</h3><p>Distribuição por fonte cadastrada</p></div></div>${incomeDonut}</section>
+      </div></section>
+      ${insight.length ? `<section class="insight-card"><h3>O que os dados mostram</h3><ul>${insight.map((x) => `<li>${x}</li>`).join('')}</ul></section>` : ''}
+      <section class="analysis-section"><div class="analysis-section-heading"><h3>Detalhes e evolução</h3><p>Explore os movimentos que compõem seus resultados.</p></div>
+      <div class="analysis-grid analysis-detail-grid">
+        <section class="card analysis-card"><div class="analysis-card-head"><div><h3>Fluxo realizado</h3><p>Recebido e pago, não valores pendentes</p></div></div>${Charts.analysisBars(data.buckets, 'inflow', 'outflow', 'Recebido', 'Pago', 'money', 'flowBucket')}</section>
+        <section class="card analysis-card"><div class="analysis-card-head"><div><h3>Fixas e variáveis</h3><p>Parte das despesas previstas</p></div></div>${natureChart}</section>
+        <section class="card analysis-card wide"><div class="analysis-card-head"><div><h3>Maiores despesas</h3><p>Toque em uma conta para ver os lançamentos</p></div></div><div class="ranking">${ranking}</div></section>
+        <section class="card analysis-card wide"><div class="analysis-card-head"><div><h3>Evolução dos investimentos</h3><p>Aportes menos resgates acumulados; não representa cotação ou rentabilidade</p></div></div>${Charts.analysisLine(investmentData, 'invested', 'Aportes líquidos acumulados', 'var(--muted)', 'investmentBucket')}</section>
+        <section class="card analysis-card wide"><div class="analysis-card-head"><div><h3>Metas financeiras</h3><p>Progresso atual das metas cadastradas</p></div></div>${goals || '<div class="chart-empty">Nenhuma meta cadastrada.</div>'}</section>
+      </div></section>
+      ${detail}
+      <a class="list analysis-report" href="#/relatorios"><span><b>Relatórios por período</b><small>Ver ou exportar os lançamentos</small></span><strong aria-hidden="true">›</strong></a>
     </div>`;
+  },
+  analysisDetail(detail) {
+    if (!detail) return '';
+    let bills = [], incomes = [], title = '';
+    const excluded = (detail.kind === 'billNameOther' || detail.kind === 'incomeNameOther')
+      ? (() => { try { return new Set(JSON.parse(detail.key)); } catch { return new Set(); } })()
+      : null;
+    if (detail.kind === 'billName') {
+      title = `Despesas: ${detail.key}`;
+      bills = State.data.bills.filter((b) => {
+        const label = b.nature === 'fixa' ? `${b.name} · Fixa` : `${b.name} · Variável`;
+        const date = Utils.dueDate(b.month, b.day);
+        return label === detail.key && date >= detail.from && date <= detail.to;
+      });
+    } else if (detail.kind === 'billNameOther') {
+      title = 'Outras despesas';
+      bills = State.data.bills.filter((b) => {
+        const label = b.nature === 'fixa' ? `${b.name} · Fixa` : `${b.name} · Variável`;
+        const date = Utils.dueDate(b.month, b.day);
+        return !excluded.has(label) && date >= detail.from && date <= detail.to;
+      });
+    } else if (detail.kind === 'incomeName') {
+      title = `Receitas: ${detail.key}`;
+      incomes = State.data.incomes.filter((i) => (i.name || i.type) === detail.key && i.date >= detail.from && i.date <= detail.to);
+    } else if (detail.kind === 'incomeNameOther') {
+      title = 'Outras fontes de receita';
+      incomes = State.data.incomes.filter((i) => !excluded.has(i.name || i.type) && i.date >= detail.from && i.date <= detail.to);
+    } else if (detail.kind === 'investmentBucket') {
+      title = `Aportes e resgates · ${Utils.fmtDate(detail.from)} – ${Utils.fmtDate(detail.to)}`;
+    } else {
+      const realized = detail.kind === 'flowBucket';
+      title = `${realized ? 'Movimentações realizadas' : 'Lançamentos'} · ${Utils.fmtDate(detail.from)}${detail.to === detail.from ? '' : ` – ${Utils.fmtDate(detail.to)}`}`;
+      bills = State.data.bills.filter((b) => {
+        const date = realized ? b.paidAt || Utils.dueDate(b.month, b.day) : Utils.dueDate(b.month, b.day);
+        return date >= detail.from && date <= detail.to && (!realized || b.status === 'pago');
+      });
+      incomes = State.data.incomes.filter((i) => i.date >= detail.from && i.date <= detail.to && (!realized || i.received));
+    }
+    const moves = detail.kind === 'investmentBucket'
+      ? State.data.assets.flatMap((asset) => asset.moves.filter((mv) => mv.date >= detail.from && mv.date <= detail.to).map((mv) => `<div class="detail-row"><span><b>${Utils.esc(asset.name)}</b><small>${mv.kind === 'aporte' ? 'Aporte' : 'Resgate'} · ${Utils.fmtDate(mv.date)}</small></span><strong>${mv.kind === 'aporte' ? '+' : '−'} ${UI.m(mv.amount)}</strong></div>`))
+      : [];
+    const rows = [
+      ...bills.map((b) => {
+        const date = detail.kind === 'flowBucket' ? b.paidAt || Utils.dueDate(b.month, b.day) : Utils.dueDate(b.month, b.day);
+        return `<button class="detail-row" data-act="editBill" data-id="${b.id}"><span><b>${Utils.esc(b.name)}</b><small>Despesa · ${Utils.fmtDate(date)} · ${b.status === 'pago' ? 'Paga' : 'A pagar'}</small></span><strong>− ${UI.m(Services.cost(b))}</strong></button>`;
+      }),
+      ...incomes.map((i) => `<button class="detail-row" data-act="editIncome" data-id="${i.id}"><span><b>${Utils.esc(i.name)}</b><small>Receita · ${Utils.fmtDate(i.date)} · ${i.received ? 'Recebida' : 'A receber'}</small></span><strong>+ ${UI.m(i.amount)}</strong></button>`),
+      ...moves
+    ].slice(0, 20).join('');
+    return `<section class="card analysis-detail" aria-live="polite"><div class="analysis-card-head"><div><h3>${Utils.esc(title)}</h3><p>Toque em um lançamento para editar</p></div><button class="link" data-act="clearAnalysisDrill">Fechar</button></div>${rows || '<div class="chart-empty">Nenhum lançamento encontrado para este item.</div>'}</section>`;
   },
   /* ---------- Investimentos ---------- */
   invest() {
@@ -627,7 +901,7 @@ const Views = {
       <section class="hero"><small>Patrimônio total</small><div class="big">${UI.m(pat)}</div>
         <div class="hero-sub"><span>Investido ${UI.m(inv)}</span><span>${ret >= 0 ? '▲' : '▼'} ${UI.m(ret)} (${pct.toFixed(1)}%)</span></div></section>
       <div class="card"><h3>Distribuição por tipo</h3><br>${Charts.donut(Services.distribution())}</div>
-      <div class="card"><h3>Evolução</h3>${Charts.bars(Services.investEvolution(Utils.monthOf(Utils.today())), { aColor: '#007aff', two: false })}</div>
+      <div class="card"><h3>Evolução</h3>${Charts.bars(Services.investEvolution(Utils.monthOf(Utils.today())), { aColor: '#3867c8', two: false })}</div>
       <div class="section-h"><h2>Meus ativos</h2></div>
       <div class="list">${assets || C.empty('📈', 'Nenhum ativo ainda.')}</div>
       <div class="section-h"><h2>Metas</h2><button class="link" data-act="newGoal">+ Nova meta</button></div>
@@ -971,6 +1245,24 @@ const Actions = {
   assetValue: (d) => Forms.assetValue(d.id), newGoal: () => Forms.goal(), editGoal: (d) => Forms.goal(State.data.goals.find((g) => g.id === d.id)),
   goalAdd: (d) => Forms.goalAdd(d.id), newCat: () => Forms.cat(), editCat: (d) => Forms.cat(d.id),
   setFilter(d) { UI.f[d.k] = d.v; UI.refresh(); },
+  analysisPeriod(d) {
+    UI.analysis.filter = d.filter;
+    UI.analysis.detail = null;
+    if (d.filter === 'custom') {
+      const month = UI.month;
+      UI.analysis.from = `${month}-01`;
+      UI.analysis.to = `${month}-${Utils.pad(Utils.daysIn(month))}`;
+    }
+    UI.refresh();
+  },
+  analysisDrill(d) {
+    let key = '';
+    try { key = d.key ? decodeURIComponent(d.key) : ''; } catch { key = d.key || ''; }
+    UI.analysis.detail = { kind: d.kind, key, from: d.from, to: d.to };
+    UI.refresh();
+    setTimeout(() => document.querySelector('.analysis-detail')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 40);
+  },
+  clearAnalysisDrill() { UI.analysis.detail = null; UI.refresh(); },
   setTheme(d) { State.data.settings.theme = d.v; State.save(); UI.applyTheme(); UI.refresh(); },
   exportCSV() { Utils.download(`financeiro-${Utils.today()}.csv`, Services.csv('0000-01', '9999-12'), 'text/csv;charset=utf-8'); UI.toast('CSV exportado'); },
   exportPeriod() { const r = UI.rep; Utils.download(`relatorio-${r.from}_${r.to}.csv`, Services.csv(r.from, r.to, r.cat), 'text/csv;charset=utf-8'); UI.toast('CSV exportado'); },
@@ -1048,7 +1340,7 @@ function bindEvents() {
     if (!ctx || !ctx.onSubmit || e.target !== ctx.form) return;
     const err = ctx.form.querySelector('.form-err'); err.textContent = '';
     const r = await ctx.onSubmit(ctx.form);
-    if (r === true) UI.closeHost('#sheet'); else if (typeof r === 'string') { err.textContent = r; err.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    if (r === true) UI.closeHost('#sheet'); else if (typeof r === 'string') { err.textContent = r; err.tabIndex = -1; err.focus(); err.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
   });
   // Máscara de moeda, busca e filtros
   document.addEventListener('input', (e) => {
@@ -1058,7 +1350,18 @@ function bindEvents() {
   });
   document.addEventListener('change', (e) => {
     const t = e.target;
-    if (t.matches('[data-rep]')) { UI.rep[t.dataset.rep] = t.value || UI.rep[t.dataset.rep]; UI.refresh(); }
+    if (t.matches('[data-analysis-date]')) {
+      UI.analysis[t.dataset.analysisDate] = t.value;
+      t.setCustomValidity('');
+      if (UI.analysis.from && UI.analysis.to && UI.analysis.from <= UI.analysis.to) {
+        UI.analysis.detail = null;
+        UI.refresh();
+      } else {
+        UI.toast('A data inicial precisa ser anterior à data final.');
+        t.setCustomValidity('Escolha um intervalo válido.');
+        t.reportValidity();
+      }
+    } else if (t.matches('[data-rep]')) { UI.rep[t.dataset.rep] = t.value || UI.rep[t.dataset.rep]; UI.refresh(); }
   });
   UI.$('#file').addEventListener('change', async (e) => {
     const file = e.target.files[0]; e.target.value = '';
